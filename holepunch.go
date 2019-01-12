@@ -19,6 +19,9 @@ type Holepunch struct {
 	connRequestChan   chan string
 	stopReqChan       chan int
 	initHolepunchChan chan peerInfo
+	stopListenChan    chan int
+	connReadyChan     chan net.Conn
+	closeChan         chan int
 	reader            *bufio.Reader
 	writer            *bufio.Writer
 }
@@ -37,6 +40,9 @@ func NewHolepunch(config Config) (h *Holepunch, err error) {
 		connRequestChan:   make(chan string, 1),
 		stopReqChan:       make(chan int),
 		initHolepunchChan: make(chan peerInfo),
+		stopListenChan:    make(chan int),
+		connReadyChan:     make(chan net.Conn),
+		closeChan:         make(chan int),
 	}
 
 	return
@@ -44,7 +50,7 @@ func NewHolepunch(config Config) (h *Holepunch, err error) {
 
 func (h *Holepunch) Connect() (err error) {
 	//immediately start listening
-	listenLoop(h.wg, h.laddr)
+	listenLoop(h.wg, h.laddr, h.stopListenChan, h.connReadyChan, h.closeChan)
 
 	//connect to relayserver
 	laddr := h.laddr.IP.String() + ":" + strconv.Itoa(h.laddr.Port)
@@ -62,10 +68,20 @@ func (h *Holepunch) Connect() (err error) {
 	h.writer.Flush()
 
 	//start go routines
-	readLoop(h.wg, h.reader, h.stopReqChan, h.initHolepunchChan)
-	connRequestLoop(h.wg, h.writer, h.connRequestChan, h.stopReqChan)
-	initHolepunch(h.wg, laddr, h.initHolepunchChan)
+	readLoop(h.wg, h.reader, h.stopReqChan, h.initHolepunchChan, h.closeChan)
+	connRequestLoop(h.wg, h.writer, h.connRequestChan, h.stopReqChan, h.closeChan)
+	initHolepunch(h.wg, laddr, h.initHolepunchChan, h.stopListenChan, h.connReadyChan, h.closeChan)
 
-	h.wg.Wait()
+	<-h.connReadyChan
+	fmt.Println("Starting Teardown")
+	teardown(h.wg, h.closeChan)
 	return
+}
+
+func teardown(wg *sync.WaitGroup, closeChan chan int) {
+	close(closeChan)
+
+	fmt.Println("Waiting for go routines to exit ...")
+	wg.Wait()
+	fmt.Println("Exit")
 }

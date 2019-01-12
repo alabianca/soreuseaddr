@@ -11,7 +11,12 @@ import (
 	"github.com/libp2p/go-reuseport"
 )
 
-func listenLoop(wg *sync.WaitGroup, addr *net.TCPAddr) {
+func wgDone(wg *sync.WaitGroup, name string) {
+	fmt.Println("Exit " + name)
+	wg.Done()
+}
+
+func listenLoop(wg *sync.WaitGroup, addr *net.TCPAddr, doneChan chan int, connReadyChan chan net.Conn, closeChan chan int) {
 
 	l, err := reuseport.Listen("tcp", addr.IP.String()+":"+strconv.Itoa(addr.Port))
 	if err != nil {
@@ -21,8 +26,8 @@ func listenLoop(wg *sync.WaitGroup, addr *net.TCPAddr) {
 	fmt.Println("Listening for Peers at: ", addr)
 	wg.Add(1)
 	go func() {
-		defer wg.Done()
-		_, err := l.Accept()
+		defer wgDone(wg, "Listen Loop")
+		conn, err := l.Accept()
 
 		if err != nil {
 			fmt.Println("Error accepting....\nExiting listen loop")
@@ -30,16 +35,45 @@ func listenLoop(wg *sync.WaitGroup, addr *net.TCPAddr) {
 		}
 
 		fmt.Println("We have a connection. Exit listen loop")
+		doneChan <- 1
+		connReadyChan <- conn
 	}()
 
 }
 
-func readLoop(wg *sync.WaitGroup, reader *bufio.Reader, stopRequestChan chan int, initHolepunchChan chan peerInfo) {
+func readLoop(wg *sync.WaitGroup, reader *bufio.Reader, stopRequestChan chan int, initHolepunchChan chan peerInfo, closeChan chan int) {
 	wg.Add(1)
 
 	go func() {
-		defer wg.Done()
+		defer wgDone(wg, "Read Loop")
+		packetReady := packetAvailable(reader)
 
+		for {
+			select {
+			case <-closeChan:
+				return
+			case packet := <-packetReady:
+				opType := packet[0]
+
+				switch opType {
+				case CONN_REQUEST_RESPONSE:
+					//check if the relay server knows about the peer
+					if _, ok := parseConnRequestResponse(packet); ok {
+						stopRequestChan <- 1
+					}
+				case INIT_HOLEPUNCH:
+					initHolepunchChan <- parseInitHolePunchMessage(packet)
+				}
+			}
+
+		}
+	}()
+}
+
+func packetAvailable(reader *bufio.Reader) chan []byte {
+	result := make(chan []byte)
+
+	go func(pkt chan []byte) {
 		for {
 			msg, err := reader.ReadString(ETX)
 
@@ -49,36 +83,29 @@ func readLoop(wg *sync.WaitGroup, reader *bufio.Reader, stopRequestChan chan int
 			}
 
 			packet := []byte(msg)
-			opType := packet[0]
-
-			switch opType {
-			case CONN_REQUEST_RESPONSE:
-				//check if the relay server knows about the peer
-				if _, ok := parseConnRequestResponse(packet); ok {
-					stopRequestChan <- 1
-				}
-			case INIT_HOLEPUNCH:
-				initHolepunchChan <- parseInitHolePunchMessage(packet)
-			}
+			pkt <- packet
 		}
-	}()
+	}(result)
+
+	return result
 }
 
-func connRequestLoop(wg *sync.WaitGroup, writer *bufio.Writer, connRequestChan chan string, stopRequestChan chan int) {
+func connRequestLoop(wg *sync.WaitGroup, writer *bufio.Writer, connRequestChan chan string, stopRequestChan chan int, closeChan chan int) {
 	wg.Add(1)
 
 	ticker := time.NewTicker(time.Duration(3) * time.Second)
 	var req string
 
 	go func() {
-		defer wg.Done()
+		defer wgDone(wg, "Conn Request Loop")
 
 		for {
 			select {
+			case <-closeChan:
+				return
 			case <-stopRequestChan:
 				fmt.Println("Stopping: connectRequestLoop")
 				ticker.Stop()
-				return
 			case request := <-connRequestChan:
 				req = request
 				writer.Write(createConnRequestPacket(req))
@@ -94,17 +121,21 @@ func connRequestLoop(wg *sync.WaitGroup, writer *bufio.Writer, connRequestChan c
 	}()
 }
 
-func initHolepunch(wg *sync.WaitGroup, laddr string, initHolepunchChan chan peerInfo) {
+func initHolepunch(wg *sync.WaitGroup, laddr string, initHolepunchChan chan peerInfo, stopListenChan chan int, connReadyChan chan net.Conn, closeChan chan int) {
 	wg.Add(1)
 
 	ticker := time.NewTicker(time.Duration(2) * time.Second)
 	var peer *peerInfo
 
 	go func() {
-		defer wg.Done()
+		defer wgDone(wg, "Init Holepunch Loop")
 
 		for {
 			select {
+			case <-closeChan:
+				return
+			case <-stopListenChan:
+				ticker.Stop()
 			case peerInf := <-initHolepunchChan:
 				peer = &peerInf
 				conn, err := reuseport.Dial("tcp", laddr, peer.String())
@@ -113,6 +144,8 @@ func initHolepunch(wg *sync.WaitGroup, laddr string, initHolepunchChan chan peer
 					fmt.Println(err)
 				} else {
 					fmt.Println("we got a connection ", conn)
+					ticker.Stop()
+					connReadyChan <- conn
 				}
 
 			case <-ticker.C:
@@ -124,6 +157,8 @@ func initHolepunch(wg *sync.WaitGroup, laddr string, initHolepunchChan chan peer
 						fmt.Println(err)
 					} else {
 						fmt.Println("we got a connection ", conn)
+						ticker.Stop()
+						connReadyChan <- conn
 					}
 				}
 

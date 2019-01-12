@@ -64,7 +64,8 @@ func main() {
 	}
 
 	config := Config{
-		relayIP:      "159.89.152.225",
+		relayIP: "127.0.0.1",
+		// relayIP:      "159.89.152.225",
 		relayPort:    "8080",
 		listenAddr:   myIp.String(),
 		localPort:    *port,
