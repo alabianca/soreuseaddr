@@ -23,22 +23,43 @@ func listenLoop(wg *sync.WaitGroup, addr *net.TCPAddr, doneChan chan int, connRe
 		fmt.Println("Could not listen\n", err)
 		return
 	}
+
 	fmt.Println("Listening for Peers at: ", addr)
 	wg.Add(1)
+	acceptedPeerConn := listen(l)
+
 	go func() {
 		defer wgDone(wg, "Listen Loop")
-		conn, err := l.Accept()
+
+		select {
+		case <-closeChan:
+			return
+		case conn := <-acceptedPeerConn:
+			doneChan <- 1
+			connReadyChan <- conn
+		}
+
+	}()
+
+}
+
+func listen(listener net.Listener) chan net.Conn {
+	result := make(chan net.Conn)
+
+	go func(connReady chan net.Conn) {
+
+		conn, err := listener.Accept()
 
 		if err != nil {
 			fmt.Println("Error accepting....\nExiting listen loop")
 			return
 		}
 
-		fmt.Println("We have a connection. Exit listen loop")
-		doneChan <- 1
-		connReadyChan <- conn
-	}()
+		connReady <- conn
 
+	}(result)
+
+	return result
 }
 
 func readLoop(wg *sync.WaitGroup, reader *bufio.Reader, stopRequestChan chan int, initHolepunchChan chan peerInfo, closeChan chan int) {
