@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"time"
 )
 
 func handleConnection(conn net.Conn) {
@@ -18,7 +19,7 @@ func handleConnection(conn net.Conn) {
 			fmt.Println("Error ", err)
 		}
 
-		fmt.Println(msg)
+		fmt.Printf("[ %s ]: %s", time.Now().Format("03:04PM"), msg)
 	}
 }
 
@@ -73,9 +74,12 @@ func main() {
 
 	go handleConnection(p2pConn)
 
+	fmt.Printf("P2P Connection is established.... You can start chatting now without a central relay server\n\n")
+
 	writer := bufio.NewWriter(p2pConn)
 	in := bufio.NewReader(os.Stdin)
 	for {
+
 		msg, err := in.ReadString('\n')
 		if err != nil {
 			fmt.Println("err ", err)
