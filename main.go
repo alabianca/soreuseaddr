@@ -1,47 +1,26 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"net"
 	"os"
 )
 
-func startListen(listen net.Listener, id int) {
-	fmt.Println("Listening ...", id)
-	go func() {
-		_, err := listen.Accept()
+func handleConnection(conn net.Conn) {
+	reader := bufio.NewReader(conn)
+
+	for {
+		msg, err := reader.ReadString('\n')
 
 		if err != nil {
-			fmt.Println(err)
-			return
+			fmt.Println("Error ", err)
 		}
 
-		fmt.Println("Got a connection: ", id)
-		//listen.Close()
-		return
-	}()
+		fmt.Println(msg)
+	}
 }
-
-// func controlSetup(network string, address string, c syscall.RawConn) error {
-// 	var operr error
-
-// 	fn := func(fd uintptr) {
-// 		i := int(fd)
-// 		operr = syscall.SetsockoptInt(i, syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
-// 	}
-
-// 	if err := c.Control(fn); err != nil {
-// 		return err
-// 	}
-
-// 	if operr != nil {
-// 		return operr
-// 	}
-
-// 	return nil
-
-// }
 
 func main() {
 	var port = flag.String("port", "4000", "The local port used to holepunch")
@@ -85,6 +64,25 @@ func main() {
 	}
 
 	fmt.Println("Connecting ...")
-	holepunch.Connect()
+	p2pConn, err := holepunch.Connect()
+
+	if err != nil {
+		fmt.Println("could not establish p2p connection")
+		os.Exit(1)
+	}
+
+	go handleConnection(p2pConn)
+
+	writer := bufio.NewWriter(p2pConn)
+	in := bufio.NewReader(os.Stdin)
+	for {
+		msg, err := in.ReadString('\n')
+		if err != nil {
+			fmt.Println("err ", err)
+		} else {
+			writer.Write([]byte(msg))
+			writer.Flush()
+		}
+	}
 
 }

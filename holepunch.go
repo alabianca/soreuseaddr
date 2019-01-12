@@ -48,7 +48,7 @@ func NewHolepunch(config Config) (h *Holepunch, err error) {
 	return
 }
 
-func (h *Holepunch) Connect() (err error) {
+func (h *Holepunch) Connect() (p2pConn net.Conn, err error) {
 	//immediately start listening
 	listenLoop(h.wg, h.laddr, h.stopListenChan, h.connReadyChan, h.closeChan)
 
@@ -72,7 +72,7 @@ func (h *Holepunch) Connect() (err error) {
 	connRequestLoop(h.wg, h.writer, h.connRequestChan, h.stopReqChan, h.closeChan)
 	initHolepunch(h.wg, laddr, h.initHolepunchChan, h.stopListenChan, h.connReadyChan, h.closeChan)
 
-	<-h.connReadyChan
+	p2pConn = <-h.connReadyChan
 	fmt.Println("Starting Teardown")
 	teardown(h.wg, h.closeChan)
 	return
